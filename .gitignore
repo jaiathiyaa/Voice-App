@@ -1,0 +1,11 @@
+# Environment variables
+.env
+finance-tracker/.env
+
+# Virtual environment
+venv/
+finance-tracker/venv/
+
+# Python cache
+__pycache__/
+*.pyc
