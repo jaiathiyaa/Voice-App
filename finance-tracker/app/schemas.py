@@ -36,3 +36,7 @@ class TransactionResponse(BaseModel):
     category: str
     description: Optional[str]
     created_at: datetime
+
+class BudgetCreate(BaseModel):
+    category: str
+    monthly_limit: float

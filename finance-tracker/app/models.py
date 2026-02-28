@@ -19,3 +19,11 @@ def transaction_helper(transaction) -> dict:
         "description": transaction.get("description"),
         "created_at": transaction["created_at"]
     }
+
+def budget_helper(budget) -> dict:
+    return {
+        "id": str(budget["_id"]),
+        "category": budget["category"],
+        "monthly_limit": budget["monthly_limit"],
+        "user_id": budget["user_id"]
+    }
