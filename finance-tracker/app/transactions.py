@@ -8,9 +8,11 @@ import os
 from app.database import db
 from app.schemas import BudgetCreate, TransactionCreate, VoiceConfirm
 from app.schemas import VoiceTransactionRequest
+from app.schemas import TransactionUpdate
+from app.schemas import SMSTransactionRequest
 from app.models import budget_helper, transaction_helper
 from app.auth import get_current_user
-
+from app.logger import logger
 
 router = APIRouter()
 
@@ -21,8 +23,13 @@ async def add_transaction(
     transaction: TransactionCreate,
     current_user=Depends(get_current_user)
 ):
+
+    user_id = str(current_user["_id"])
+
+    logger.info(f"User {user_id} is adding a transaction")
+
     new_transaction = {
-        "user_id": str(current_user["_id"]),
+        "user_id": user_id,
         "amount": transaction.amount,
         "type": transaction.type,
         "category": transaction.category,
@@ -31,6 +38,9 @@ async def add_transaction(
     }
 
     result = await db.transactions.insert_one(new_transaction)
+
+    logger.info(f"Transaction created with ID {result.inserted_id}")
+
     created_transaction = await db.transactions.find_one({"_id": result.inserted_id})
 
     return transaction_helper(created_transaction)
@@ -38,35 +48,168 @@ async def add_transaction(
 
 # 📄 Get All Transactions
 @router.get("/transactions")
-async def get_transactions(current_user=Depends(get_current_user)):
+async def get_transactions(
+    page: int = 1,
+    limit: int = 10,
+    current_user=Depends(get_current_user)
+):
+
+    user_id = str(current_user["_id"])
+
+    logger.info(f"User {user_id} requested transactions page={page} limit={limit}")
+
+    skip = (page - 1) * limit
+
     transactions = []
-    cursor = db.transactions.find({"user_id": str(current_user["_id"])})
+
+    cursor = db.transactions.find(
+        {"user_id": user_id}
+    ).skip(skip).limit(limit)
+
+    async for transaction in cursor:
+        transactions.append(transaction_helper(transaction))
+
+    total = await db.transactions.count_documents({"user_id": user_id})
+
+    return {
+        "page": page,
+        "limit": limit,
+        "total_transactions": total,
+        "data": transactions
+    }
+
+@router.put("/transactions/{transaction_id}")
+async def update_transaction(
+    transaction_id: str,
+    updated_data: TransactionUpdate,
+    current_user=Depends(get_current_user)
+):
+
+    user_id = str(current_user["_id"])
+    logger.info(f"User {user_id} attempting to update transaction {transaction_id}")
+    transaction = await db.transactions.find_one({
+        "_id": ObjectId(transaction_id),
+        "user_id": user_id
+    })
+
+    if not transaction:
+        logger.warning(f"Transaction {transaction_id} not found for user {user_id}")
+        raise HTTPException(status_code=404, detail="Transaction not found")
+
+    update_fields = {}
+
+    if updated_data.amount is not None:
+        update_fields["amount"] = updated_data.amount
+
+    if updated_data.type is not None:
+        update_fields["type"] = updated_data.type
+
+    if updated_data.category is not None:
+        update_fields["category"] = updated_data.category
+
+    if updated_data.description is not None:
+        update_fields["description"] = updated_data.description
+
+    if not update_fields:
+        raise HTTPException(status_code=400, detail="No fields provided for update")
+
+    await db.transactions.update_one(
+        {"_id": ObjectId(transaction_id)},
+        {"$set": update_fields}
+    )
+
+    updated_transaction = await db.transactions.find_one({"_id": ObjectId(transaction_id)})
+    logger.info(f"Transaction {transaction_id} updated successfully by user {user_id}")
+    return transaction_helper(updated_transaction)
+
+# 🗑 Delete Transaction
+@router.delete("/transactions/{transaction_id}")
+async def delete_transaction(transaction_id: str, current_user=Depends(get_current_user)):
+
+    user_id = str(current_user["_id"])
+
+    logger.info(f"User {user_id} attempting to delete transaction {transaction_id}")
+
+    result = await db.transactions.delete_one({
+        "_id": ObjectId(transaction_id),
+        "user_id": user_id
+    })
+
+    if result.deleted_count == 0:
+        logger.warning(f"Transaction {transaction_id} not found for deletion")
+        raise HTTPException(status_code=404, detail="Transaction not found")
+
+    logger.info(f"Transaction {transaction_id} deleted successfully")
+
+    return {"message": "Transaction deleted"}
+
+@router.get("/transactions/filter")
+async def filter_transactions(
+    category: str = None,
+    txn_type: str = None,
+    start_date: str = None,
+    end_date: str = None,
+    current_user=Depends(get_current_user)
+):
+
+    user_id = str(current_user["_id"])
+    logger.info(f"User {user_id} used transaction filters")
+    query = {"user_id": user_id}
+
+    if category:
+        query["category"] = category
+
+    if txn_type:
+        query["type"] = txn_type
+
+    if start_date and end_date:
+        query["created_at"] = {
+            "$gte": datetime.fromisoformat(start_date),
+            "$lte": datetime.fromisoformat(end_date)
+        }
+
+    transactions = []
+
+    cursor = db.transactions.find(query)
 
     async for transaction in cursor:
         transactions.append(transaction_helper(transaction))
 
     return transactions
 
+@router.get("/categories")
+async def get_categories():
+    logger.info("Categories API requested")
+    income_categories = [
+        "Salary",
+        "Freelance",
+        "Business",
+        "Bonus",
+        "Investment",
+        "Gift",
+        "Refund"
+    ]
 
-# 🗑 Delete Transaction
-@router.delete("/transactions/{transaction_id}")
-async def delete_transaction(transaction_id: str, current_user=Depends(get_current_user)):
-    result = await db.transactions.delete_one({
-        "_id": ObjectId(transaction_id),
-        "user_id": str(current_user["_id"])
-    })
+    expense_categories = [
+        "Food",
+        "Travel",
+        "Shopping",
+        "Fuel",
+        "Rent",
+        "Entertainment",
+        "Utilities",
+        "Others"
+    ]
 
-    if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Transaction not found")
-
-    return {"message": "Transaction deleted"}
-
-
+    return {
+        "income_categories": income_categories,
+        "expense_categories": expense_categories
+    }
 
 @router.get("/transactions/summary")
 async def transaction_summary(current_user=Depends(get_current_user)):
     user_id = str(current_user["_id"])
-
+    logger.info(f"Generating financial summary for user {user_id}")
     income = 0
     expense = 0
 
@@ -180,11 +323,35 @@ async def financial_health(current_user=Depends(get_current_user)):
         "health_score": score
     }
 
+@router.get("/transactions/heatmap")
+async def spending_heatmap(current_user=Depends(get_current_user)):
+
+    user_id = str(current_user["_id"])
+    logger.info(f"Generating heatmap for user {user_id}")
+    heatmap = {}
+
+    cursor = db.transactions.find({
+        "user_id": user_id,
+        "type": "expense"
+    })
+
+    async for transaction in cursor:
+
+        date_str = transaction["created_at"].strftime("%Y-%m-%d")
+        amount = transaction["amount"]
+
+        if date_str not in heatmap:
+            heatmap[date_str] = 0
+
+        heatmap[date_str] += amount
+
+    return heatmap
+
 
 @router.get("/transactions/spending-pattern")
 async def spending_pattern(current_user=Depends(get_current_user)):
     user_id = str(current_user["_id"])
-
+    logger.info(f"Calculating spending pattern for user {user_id}")
     category_expense = {}
 
     cursor = db.transactions.find({
@@ -215,7 +382,7 @@ async def spending_pattern(current_user=Depends(get_current_user)):
 @router.post("/budget")
 async def set_budget(budget: BudgetCreate, current_user=Depends(get_current_user)):
     user_id = str(current_user["_id"])
-
+    logger.info(f"User {user_id} setting budget for {budget.category}")
     existing = await db.budgets.find_one({
         "user_id": user_id,
         "category": budget.category
@@ -274,7 +441,7 @@ async def budget_status(current_user=Depends(get_current_user)):
 @router.get("/alerts")
 async def generate_alerts(current_user=Depends(get_current_user)):
     user_id = str(current_user["_id"])
-
+    logger.info(f"Generating alerts for user {user_id}")
     alerts = []
 
     income = 0
@@ -332,7 +499,7 @@ client = genai.Client(
 @router.get("/ai-coach")
 async def ai_finance_coach(current_user=Depends(get_current_user)):
     user_id = str(current_user["_id"])
-
+    logger.info(f"User {user_id} requested AI financial analysis")
     income = 0
     expense = 0
     category_expense = {}
@@ -392,6 +559,7 @@ async def ai_finance_coach(current_user=Depends(get_current_user)):
         )
         raw_text = response.text
     except Exception as e:
+        logger.error(f"Gemini AI error for user {user_id}: {str(e)}")
         return {
             "income": income,
             "expense": expense,
@@ -516,8 +684,9 @@ async def voice_transaction(
     request: VoiceTransactionRequest,
     current_user=Depends(get_current_user)
 ):
+    logger.info(f"Voice command received: {request.text}")
     parsed = parse_transaction(request.text)
-
+    logger.info(f"Parsed voice transaction: {parsed}")
     if not parsed["amount"]:
         raise HTTPException(status_code=400, detail="Could not detect amount")
 
@@ -536,7 +705,7 @@ async def confirm_voice_transaction(
     data: VoiceConfirm,
     current_user=Depends(get_current_user)
 ):
-
+    logger.info(f"Voice transaction confirmed by user {current_user['_id']}")
     new_txn = {
         "user_id": str(current_user["_id"]),
         "amount": data.amount,
@@ -546,8 +715,117 @@ async def confirm_voice_transaction(
     }
 
     result = await db.transactions.insert_one(new_txn)
-
+    
     return {
         "message": "Transaction saved successfully",
         "transaction_id": str(result.inserted_id)
     }
+
+
+def parse_sms_transaction(text: str):
+    
+    text_lower = text.lower()
+
+    amount = None
+    txn_type = "expense"
+    merchant = "Unknown"
+    bank = "Unknown"
+    category = "Others"
+
+    # -------------------------
+    # Detect Amount
+    # -------------------------
+    amount_match = re.search(r'(?:rs\.?|inr)?\s?(\d+(?:,\d+)*)', text_lower)
+
+    if amount_match:
+        amount = int(amount_match.group(1).replace(",", ""))
+
+    # -------------------------
+    # Detect Transaction Type
+    # -------------------------
+    income_words = ["credited", "received", "deposit"]
+    expense_words = ["spent", "debited", "purchase", "paid", "withdrawn"]
+
+    if any(word in text_lower for word in income_words):
+        txn_type = "income"
+
+    elif any(word in text_lower for word in expense_words):
+        txn_type = "expense"
+
+    # -------------------------
+    # Detect Bank
+    # -------------------------
+    banks = ["hdfc", "sbi", "icici", "axis", "kotak", "yes bank"]
+
+    for b in banks:
+        if b in text_lower:
+            bank = b.upper()
+            break
+
+    # -------------------------
+    # Detect Merchant
+    # -------------------------
+    merchant_patterns = [
+        r'at\s([a-zA-Z0-9\s]+)',
+        r'to\s([a-zA-Z0-9\s]+)',
+        r'paid\s+to\s([a-zA-Z0-9\s]+)'
+    ]
+
+    for pattern in merchant_patterns:
+        match = re.search(pattern, text_lower)
+        if match:
+            merchant = match.group(1).strip().split()[0].capitalize()
+            break
+
+    # -------------------------
+    # Category Detection
+    # -------------------------
+    shopping_merchants = ["amazon", "flipkart", "myntra"]
+    food_merchants = ["swiggy", "zomato"]
+    fuel_merchants = ["hpcl", "ioc", "shell"]
+
+    if merchant.lower() in shopping_merchants:
+        category = "Shopping"
+
+    elif merchant.lower() in food_merchants:
+        category = "Food"
+
+    elif merchant.lower() in fuel_merchants:
+        category = "Fuel"
+
+    return {
+        "amount": amount,
+        "type": txn_type,
+        "merchant": merchant,
+        "bank": bank,
+        "category": category
+    }
+
+@router.post("/sms-transaction")
+async def sms_transaction(
+    request: SMSTransactionRequest,
+    current_user=Depends(get_current_user)
+):
+
+    parsed = parse_sms_transaction(request.sms_text)
+
+    if not parsed["amount"]:
+        raise HTTPException(status_code=400, detail="Could not detect amount")
+
+    new_transaction = {
+        "user_id": str(current_user["_id"]),
+        "amount": parsed["amount"],
+        "type": parsed["type"],
+        "category": parsed["category"],
+        "description": parsed["merchant"],
+        "created_at": datetime.utcnow()
+    }
+
+    result = await db.transactions.insert_one(new_transaction)
+
+    return {
+        "message": "Transaction added from SMS",
+        "transaction_id": str(result.inserted_id),
+        "parsed_data": parsed
+    }
+
