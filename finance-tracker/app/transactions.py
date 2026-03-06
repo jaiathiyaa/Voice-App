@@ -1,15 +1,16 @@
 from fastapi import APIRouter, Depends, HTTPException
-from datetime import datetime
 from bson import ObjectId
 import json
 import re
+from datetime import datetime, timedelta
 from google import genai
-from google.genai.types import HttpOptions
 import os
 from app.database import db
-from app.schemas import BudgetCreate, TransactionCreate
+from app.schemas import BudgetCreate, TransactionCreate, VoiceConfirm
+from app.schemas import VoiceTransactionRequest
 from app.models import budget_helper, transaction_helper
 from app.auth import get_current_user
+
 
 router = APIRouter()
 
@@ -327,7 +328,6 @@ async def generate_alerts(current_user=Depends(get_current_user)):
 
 client = genai.Client(
     api_key=os.getenv("GEMINI_API_KEY"),
-    http_options=HttpOptions(api_version="v1")
 )
 @router.get("/ai-coach")
 async def ai_finance_coach(current_user=Depends(get_current_user)):
@@ -440,4 +440,114 @@ async def ai_finance_coach(current_user=Depends(get_current_user)):
         "savings": savings,
         "health_score": health_score,
         "ai_analysis": ai_data
+    }
+
+
+
+def parse_transaction(text: str):
+    text = text.lower()
+
+    amount = None
+    txn_type = "expense"
+    category = "Others"
+    txn_date = datetime.utcnow()
+
+    # Extract amount
+    match = re.search(r'\d+', text)
+    if match:
+        amount = int(match.group())
+
+    # Income keywords
+    income_keywords = [
+        "salary",
+        "received",
+        "income",
+        "credited",
+        "earned",
+        "got"
+    ]
+
+    # Income categories
+    income_categories = {
+        "salary": "Salary",
+        "freelance": "Freelance",
+        "business": "Business",
+        "bonus": "Bonus",
+        "dividend": "Investment",
+        "interest": "Interest",
+        "gift": "Gift",
+        "refund": "Refund"
+    }
+
+    # Expense categories
+    expense_categories = ["food", "travel", "rent", "shopping", "fuel"]
+
+    # Detect income
+    if any(word in text for word in income_keywords):
+        txn_type = "income"
+
+        for key, value in income_categories.items():
+            if key in text:
+                category = value
+                break
+
+    # Detect expense category only if expense
+    else:
+        for cat in expense_categories:
+            if cat in text:
+                category = cat.capitalize()
+                break
+
+    # Detect date
+    if "yesterday" in text:
+        txn_date = datetime.utcnow() - timedelta(days=1)
+
+    return {
+        "amount": amount,
+        "type": txn_type,
+        "category": category,
+        "date": txn_date
+    }
+
+
+
+@router.post("/voice-transaction")
+async def voice_transaction(
+    request: VoiceTransactionRequest,
+    current_user=Depends(get_current_user)
+):
+    parsed = parse_transaction(request.text)
+
+    if not parsed["amount"]:
+        raise HTTPException(status_code=400, detail="Could not detect amount")
+
+    # DO NOT SAVE DIRECTLY (Return parsed first)
+    return {
+        "parsed_data": parsed,
+        "message": "Confirm to save transaction"
+    }
+
+
+
+
+
+@router.post("/voice-transaction/confirm")
+async def confirm_voice_transaction(
+    data: VoiceConfirm,
+    current_user=Depends(get_current_user)
+):
+
+    new_txn = {
+        "user_id": str(current_user["_id"]),
+        "amount": data.amount,
+        "type": data.type,
+        "category": data.category,
+        "created_at": datetime.utcnow()
+    }
+
+    result = await db.transactions.insert_one(new_txn)
+
+    return {
+        "message": "Transaction saved successfully",
+        "transaction_id": str(result.inserted_id)
     }

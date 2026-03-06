@@ -1,0 +1,34 @@
+# Core Backend
+
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+
+# Database
+
+motor==3.4.0
+pymongo==4.7.2
+
+# Authentication & Security
+
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# Environment Variables
+
+python-dotenv==1.0.1
+
+# Request Validation
+
+pydantic==2.7.1
+
+# Multipart Form (OAuth2 login support)
+
+python-multipart==0.0.9
+
+# AI Integration (Google Gemini)
+
+google-genai==0.3.0
+
+# Async HTTP support
+
+httpx==0.27.0

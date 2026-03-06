@@ -40,3 +40,13 @@ class TransactionResponse(BaseModel):
 class BudgetCreate(BaseModel):
     category: str
     monthly_limit: float
+
+
+class VoiceTransactionRequest(BaseModel):
+    text: str
+
+
+class VoiceConfirm(BaseModel):
+    amount: int
+    type: str
+    category: str
