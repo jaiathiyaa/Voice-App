@@ -1,10 +1,10 @@
 # Environment variables
 .env
-finance-tracker/.env
+backend/.env
 
 # Virtual environment
 venv/
-finance-tracker/venv/
+backend/venv/
 
 # Python cache
 __pycache__/
